@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OVF 磁矩可视化器</title>
+<style>
+:root { --bg: #fafafa; --fg: #1a1a1a; --fg2: #555; --fg3: #888; --border: #e0e0e0; --accent: #2563eb; --hover: #f0f0f0; font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif; }
+body { margin: 0; padding: 20px; font-family: var(--font-sans); background: var(--bg); color: var(--fg); line-height: 1.5; }
+.container { max-width: 960px; margin: 0 auto; }
+h1 { font-size: 20px; font-weight: 600; margin: 0 0 16px 0; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 14px; background: #fff; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 12px; }
+.toolbar input[type="file"] { font: inherit; font-size: 13px; cursor: pointer; }
+.controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.controls label { font-size: 13px; color: var(--fg2); display: flex; align-items: center; gap: 6px; }
+.controls input[type="range"] { width: 140px; }
+.controls .z-val { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--fg); min-width: 28px; text-align: center; }
+.mode-btns { display: flex; gap: 4px; }
+.mode-btns button { padding: 5px 12px; font-size: 13px; border: 1px solid var(--border); background: #fff; border-radius: 6px; cursor: pointer; color: var(--fg2); transition: all 0.15s; }
+.mode-btns button.active { border-color: var(--fg); color: var(--fg); background: #f5f5f5; }
+.info-panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; padding: 10px 14px; background: #fff; border: 1px solid var(--border); border-radius: 10px; font-size: 13px; margin-bottom: 12px; }
+.info-item { display: flex; gap: 6px; }
+.info-item .label { color: var(--fg3); white-space: nowrap; }
+.info-item .value { color: var(--fg); font-weight: 500; font-variant-numeric: tabular-nums; }
+.canvas-wrap { position: relative; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; display: flex; justify-content: center; align-items: center; min-height: 320px; background: repeating-conic-gradient(#f7f7f7 0% 25%, #fff 0% 50%) 50% / 20px 20px; margin-bottom: 8px; }
+#vizCanvas { display: block; max-width: 100%; image-rendering: pixelated; }
+.status { text-align: center; font-size: 14px; color: var(--fg3); padding: 40px 20px; }
+.legend-bar { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg3); }
+.legend-gradient { width: 160px; height: 10px; border-radius: 5px; border: 1px solid var(--border); }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>OVF 磁矩可视化器</h1>
+  <div class="toolbar">
+    <input type="file" id="ovfFile" accept=".ovf">
+    <div class="controls hidden" id="controls">
+      <label>Z 切片 <input type="range" id="zSlider" min="0" max="0" value="0"><span class="z-val" id="zVal">0</span></label>
+      <div class="mode-btns">
+        <button id="btnMz" class="active">Mz 切片</button>
+        <button id="btnM">M 角度</button>
+      </div>
+    </div>
+  </div>
+  <div class="info-panel hidden" id="infoPanel">
+    <div class="info-item"><span class="label">网格 (nx x ny x nz):</span><span class="value" id="infoGrid">-</span></div>
+    <div class="info-item"><span class="label">单元尺寸:</span><span class="value" id="infoCell">-</span></div>
+    <div class="info-item"><span class="label">样品尺寸:</span><span class="value" id="infoSize">-</span></div>
+    <div class="info-item"><span class="label">数据格式:</span><span class="value" id="infoFormat">-</span></div>
+    <div class="info-item"><span class="label">总数据点:</span><span class="value" id="infoPoints">-</span></div>
+  </div>
+  <div class="canvas-wrap" id="canvasWrap">
+    <div class="status" id="status">请选择 OVF 文件以加载磁矩分布</div>
+    <canvas id="vizCanvas" class="hidden"></canvas>
+  </div>
+  <div id="legendArea" class="hidden">
+    <div class="legend-bar" id="legendMz">
+      <span>-1</span>
+      <div class="legend-gradient" style="background: linear-gradient(to right, #313695, #74add1, #ffffbf, #f46d43, #a50026)"></div>
+      <span>+1</span>
+      <span style="margin-left:8px">Mz</span>
+    </div>
+    <div class="legend-bar hidden" id="legendM">
+      <span>色相 = 面内方向</span>
+      <span style="margin-left:12px">亮度 Mz</span>
+      <span style="margin-left:12px">饱和度 面内大小</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  "use strict";
+  var el = {
+    file:     document.getElementById("ovfFile"),
+    ctrl:     document.getElementById("controls"),
+    zSlider:  document.getElementById("zSlider"),
+    zVal:     document.getElementById("zVal"),
+    btnMz:    document.getElementById("btnMz"),
+    btnM:     document.getElementById("btnM"),
+    canvas:   document.getElementById("vizCanvas"),
+    ctx:      document.getElementById("vizCanvas").getContext("2d"),
+    status:   document.getElementById("status"),
+    info:     document.getElementById("infoPanel"),
+    legend:   document.getElementById("legendArea"),
+    legMz:    document.getElementById("legendMz"),
+    legM:     document.getElementById("legendM"),
+    infoGrid:  document.getElementById("infoGrid"),
+    infoCell:  document.getElementById("infoCell"),
+    infoSize:  document.getElementById("infoSize"),
+    infoFmt:   document.getElementById("infoFormat"),
+    infoPts:   document.getElementById("infoPoints"),
+  };
+  var data = null;
+  var header = {};
+  var nx = 0, ny = 0, nz = 0;
+  var drawMode = "mz";
+
+  function hsl(h, s, l) {
+    var r, g, b;
+    if (s === 0) { r = g = b = l; }
+    else {
+      var q = l < 0.5 ? l*(1+s) : l+s-l*s;
+      var p = 2*l - q;
+      r = hue2rgb(p, q, h+1/3);
+      g = hue2rgb(p, q, h);
+      b = hue2rgb(p, q, h-1/3);
+    }
+    return [Math.round(r*255), Math.round(g*255), Math.round(b*255)];
+  }
+  function hue2rgb(p, q, t) {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1/6) return p + (q-p)*6*t;
+    if (t < 1/2) return q;
+    if (t < 2/3) return p + (q-p)*(2/3-t)*6;
+    return p;
+  }
+
+  function diverging(t) {
+    t = Math.max(-1, Math.min(1, t));
+    var stops = [[-1,49,54,149],[-0.5,117,170,209],[0,255,255,191],[0.5,244,109,67],[1,165,0,38]];
+    var lo = stops[0], hi = stops[stops.length-1];
+    for (var i = 0; i < stops.length-1; i++) {
+      if (t >= stops[i][0] && t <= stops[i+1][0]) { lo = stops[i]; hi = stops[i+1]; break; }
+    }
+    var span = hi[0] - lo[0];
+    var f = span === 0 ? 0 : (t - lo[0]) / span;
+    return [Math.round(lo[1]+(hi[1]-lo[1])*f), Math.round(lo[2]+(hi[2]-lo[2])*f), Math.round(lo[3]+(hi[3]-lo[3])*f)];
+  }
+
+  function parseOVF(file) {
+    return new Promise(function(resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          var buf = e.target.result;
+          var totalLen = buf.byteLength;
+          var u8 = new Uint8Array(buf);
+
+          // Find "# End: Header" marker
+          var marker = new TextEncoder().encode("# End: Header");
+          var hdrEnd = -1;
+          for (var i = 0; i < Math.min(totalLen, 8192) - marker.length; i++) {
+            var ok = true;
+            for (var j = 0; j < marker.length; j++) { if (u8[i+j] !== marker[j]) { ok = false; break; } }
+            if (ok) { hdrEnd = i; break; }
+          }
+          if (hdrEnd === -1) { reject(new Error("未找到 # End: Header")); return; }
+
+          // Extend read to include "# Begin: Data ...\\n" line after "# End: Header\\n"
+          var dataDeclEnd = hdrEnd + marker.length;
+          // skip past "# End: Header\\n"
+          while (dataDeclEnd < totalLen && u8[dataDeclEnd] !== 10) dataDeclEnd++;
+          if (dataDeclEnd < totalLen) dataDeclEnd++;
+          // read the next line ("# Begin: Data Binary 4\\n")
+          var nextLineEnd = dataDeclEnd;
+          while (nextLineEnd < totalLen && u8[nextLineEnd] !== 10) nextLineEnd++;
+          if (nextLineEnd < totalLen) nextLineEnd++;  // skip the \\n
+
+          var hdrStr = new TextDecoder("ascii").decode(new Uint8Array(buf, 0, nextLineEnd));
+
+          // Parse header fields
+          var h = {};
+          hdrStr.split(/\r?\n/).forEach(function(line) {
+            var m;
+            m = line.match(/^#\s*xnodes:\s*(\d+)/i);       if (m) h.nx = parseInt(m[1]);
+            m = line.match(/^#\s*ynodes:\s*(\d+)/i);       if (m) h.ny = parseInt(m[1]);
+            m = line.match(/^#\s*znodes:\s*(\d+)/i);       if (m) h.nz = parseInt(m[1]);
+            m = line.match(/^#\s*xstepsize:\s*([\d.+-]+)/i); if (m) h.dx = parseFloat(m[1]);
+            m = line.match(/^#\s*ystepsize:\s*([\d.+-]+)/i); if (m) h.dy = parseFloat(m[1]);
+            m = line.match(/^#\s*zstepsize:\s*([\d.+-]+)/i); if (m) h.dz = parseFloat(m[1]);
+            m = line.match(/^#\s*valuemultiplier:\s*([\d.+-]+)/i); if (m) h.vmul = parseFloat(m[1]);
+            m = line.match(/^#\s*valuedim:\s*(\d+)/i);     if (m) h.vd = parseInt(m[1]);
+            m = line.match(/^#\s*byte\s+order:\s*(\d+)/i); if (m) h.order = m[1];
+          });
+          h.vmul = h.vmul || 1.0;
+          h.vd = h.vd || 3;
+
+          // Detect data type from the decl line: "Data Binary 4", "Data Binary 8", or "Data Text"
+          var dtype;
+          if (/Data\s+Binary\s*4/i.test(hdrStr)) dtype = 4;
+          else if (/Data\s+Binary\s*8/i.test(hdrStr)) dtype = 8;
+          else if (/Data\s+Text/i.test(hdrStr)) dtype = 0;
+          else { reject(new Error("无法识别数据格式")); return; }
+
+          // Locate binary data start (skip both lines)
+          var ds = hdrEnd + marker.length;
+          while (ds < totalLen && u8[ds] !== 10) ds++;
+          if (ds < totalLen) ds++;
+          while (ds < totalLen && u8[ds] !== 10) ds++;
+          if (ds < totalLen) ds++;
+          while (ds < totalLen && (u8[ds] === 10 || u8[ds] === 13)) ds++;
+
+          var expected = h.nx * h.ny * h.nz * h.vd;
+
+          // Read raw data
+          var raw;
+          if (dtype === 0) {
+            var txt = new TextDecoder("ascii").decode(new Uint8Array(buf, ds));
+            var nums = txt.trim().split(/\\s+/).map(Number).filter(function(n) { return !isNaN(n); });
+            raw = new Float32Array(nums);
+          } else {
+            var bpe = dtype === 4 ? 4 : 8;
+            var src = new Uint8Array(buf, ds);  // copy all remaining bytes
+            var cpy = new Uint8Array(src.length);
+            for (var ci = 0; ci < src.length; ci++) cpy[ci] = src[ci];
+            raw = dtype === 4 ? new Float32Array(cpy.buffer) : new Float64Array(cpy.buffer);
+            if (h.order === "4321") {
+              var dv = new DataView(cpy.buffer);
+              for (var si = 0; si < raw.length; si++) {
+                raw[si] = dtype === 4 ? dv.getFloat32(si*4, true) : dv.getFloat64(si*8, true);
+              }
+            }
+            if (dtype === 4 && expected >= 3 && Math.abs(raw[0]) > 10) {
+              var mag = Math.sqrt(raw[1]*raw[1] + raw[2]*raw[2] + raw[3]*raw[3]);
+              if (mag > 0.3 && mag < 1.7) {
+                var tmp = new Float32Array(raw.length - 1);
+                for (var ti = 0; ti < tmp.length; ti++) tmp[ti] = raw[ti+1];
+                raw = tmp;
+              }
+            }
+          }
+
+          if (raw.length < expected) { reject(new Error("数据不足: " + raw.length + " < " + expected)); return; }
+          if (raw.length > expected) {
+            var tmp2 = new Float32Array(expected);
+            for (var ti2 = 0; ti2 < expected; ti2++) tmp2[ti2] = raw[ti2];
+            raw = tmp2;
+          }
+          if (h.vmul !== 1.0) { for (var mi = 0; mi < raw.length; mi++) raw[mi] *= h.vmul; }
+
+          // Transpose: x-fastest -> z-fastest
+          var out = new Float32Array(expected);
+          for (var iz = 0; iz < h.nz; iz++) {
+            for (var iy = 0; iy < h.ny; iy++) {
+              for (var ix = 0; ix < h.nx; ix++) {
+                var srcIdx = ((iz * h.ny + iy) * h.nx + ix) * h.vd;
+                var dstIdx = ((ix * h.ny + iy) * h.nz + iz) * h.vd;
+                for (var c = 0; c < h.vd; c++) out[dstIdx + c] = raw[srcIdx + c];
+              }
+            }
+          }
+          resolve({ data: out, header: h });
+        } catch (ex) { reject(ex); }
+      };
+      reader.onerror = function() { reject(new Error("读取文件失败")); };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function draw() {
+    if (!data) return;
+    var z = parseInt(el.zSlider.value, 10);
+    el.canvas.width = nx;
+    el.canvas.height = ny;
+    var img = el.ctx.createImageData(nx, ny);
+    var px = img.data;
+    for (var iy = 0; iy < ny; iy++) {
+      for (var ix = 0; ix < nx; ix++) {
+        var base = ((ix * ny + iy) * nz + z) * 3;
+        var mx = data[base], my = data[base+1], mz = data[base+2];
+        var pi = (iy * nx + ix) * 4;
+        if (drawMode === "mz") {
+          var c = diverging(mz);
+          px[pi] = c[0]; px[pi+1] = c[1]; px[pi+2] = c[2]; px[pi+3] = 255;
+        } else {
+          var angle = Math.atan2(my, mx);
+          var hue = (angle + Math.PI) / (2 * Math.PI);
+          var inplane = Math.min(1, Math.sqrt(mx*mx + my*my) * 1.3);
+          var light = 0.5 + 0.45 * Math.max(-1, Math.min(1, mz));
+          var c2 = hsl(hue, inplane, light);
+          px[pi] = c2[0]; px[pi+1] = c2[1]; px[pi+2] = c2[2]; px[pi+3] = 255;
+        }
+      }
+    }
+    el.ctx.putImageData(img, 0, 0);
+    fitCanvas();
+  }
+
+  function fitCanvas() {
+    var wrap = document.getElementById("canvasWrap");
+    var ww = wrap.clientWidth - 24;
+    var wh = Math.min(600, window.innerHeight * 0.55);
+    if (nx && ny) {
+      var scale = Math.min(ww / nx, wh / ny, 4);
+      el.canvas.style.width = Math.round(nx * scale) + "px";
+      el.canvas.style.height = Math.round(ny * scale) + "px";
+    }
+  }
+
+  function updateInfo() {
+    el.infoGrid.textContent = nx + " x " + ny + " x " + nz;
+    el.infoCell.textContent = (header.dx*1e9).toFixed(2) + " x " + (header.dy*1e9).toFixed(2) + " x " + (header.dz*1e9).toFixed(2) + " nm";
+    el.infoSize.textContent = (nx*header.dx*1e6).toFixed(2) + " x " + (ny*header.dy*1e6).toFixed(2) + " x " + (nz*header.dz*1e6).toFixed(2) + " um";
+    el.infoFmt.textContent = "OVF 2.0";
+    el.infoPts.textContent = (nx*ny*nz).toLocaleString();
+  }
+
+  el.file.addEventListener("change", function(e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    el.status.textContent = "正在解析 OVF 文件...";
+    parseOVF(file).then(function(result) {
+      data = result.data;
+      header = result.header;
+      nx = header.nx; ny = header.ny; nz = header.nz;
+      el.zSlider.max = nz - 1;
+      el.zSlider.value = Math.floor(nz / 2);
+      el.zVal.textContent = el.zSlider.value;
+      el.ctrl.classList.remove("hidden");
+      el.info.classList.remove("hidden");
+      el.legend.classList.remove("hidden");
+      el.status.classList.add("hidden");
+      el.canvas.classList.remove("hidden");
+      updateInfo();
+      draw();
+    }).catch(function(err) {
+      el.status.classList.remove("hidden");
+      el.canvas.classList.add("hidden");
+      el.status.textContent = "解析失败: " + err.message;
+      console.error(err);
+    });
+  });
+
+  el.zSlider.addEventListener("input", function() {
+    el.zVal.textContent = el.zSlider.value;
+    draw();
+  });
+
+  el.btnMz.addEventListener("click", function() {
+    drawMode = "mz";
+    el.btnMz.classList.add("active");
+    el.btnM.classList.remove("active");
+    el.legMz.classList.remove("hidden");
+    el.legM.classList.add("hidden");
+    draw();
+  });
+
+  el.btnM.addEventListener("click", function() {
+    drawMode = "m";
+    el.btnM.classList.add("active");
+    el.btnMz.classList.remove("active");
+    el.legMz.classList.add("hidden");
+    el.legM.classList.remove("hidden");
+    draw();
+  });
+
+  window.addEventListener("resize", fitCanvas);
+})();
+</script>
+</body>
+</html>

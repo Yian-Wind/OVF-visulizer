@@ -1,0 +1,16 @@
+# Simulation data and generated exports
+*.ovf
+*.ovf.gz
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.csv
+*.zip
+*.7z
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

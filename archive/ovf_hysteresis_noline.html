@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OVF 磁滞回线分析器</title>
+<style>
+:root {
+  --bg: #fafafa;
+  --fg: #1a1a1a;
+  --fg2: #555;
+  --fg3: #888;
+  --border: #e0e0e0;
+  --accent: #2563eb;
+  --accent-light: #dbeafe;
+  --accent-down: #dc2626;
+  --accent-down-light: #fee2e2;
+  --hover: #f0f0f0;
+  --danger: #dc2626;
+  --success: #16a34a;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 20px; font-family: var(--font-sans); background: var(--bg); color: var(--fg); line-height: 1.5; }
+.container { max-width: 1200px; margin: 0 auto; }
+h1 { font-size: 20px; font-weight: 600; margin: 0 0 16px 0; }
+
+/* Toolbar */
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 14px; background: #fff; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 12px; }
+.toolbar input[type="file"] { font: inherit; font-size: 13px; cursor: pointer; }
+.toolbar .btn { padding: 6px 16px; font-size: 13px; border: 1px solid var(--border); background: #fff; border-radius: 6px; cursor: pointer; color: var(--fg2); transition: all 0.15s; }
+.toolbar .btn:hover { background: var(--hover); }
+.toolbar .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.toolbar .btn.primary:hover { background: #1d4ed8; }
+.toolbar .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Progress */
+.progress-area { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--fg2); }
+.progress-bar { width: 200px; height: 6px; background: #e5e5e5; border-radius: 3px; overflow: hidden; }
+.progress-bar .fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.2s; width: 0%; }
+
+/* Info panel */
+.info-panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; padding: 10px 14px; background: #fff; border: 1px solid var(--border); border-radius: 10px; font-size: 13px; margin-bottom: 12px; }
+.info-item { display: flex; gap: 6px; }
+.info-item .label { color: var(--fg3); white-space: nowrap; }
+.info-item .value { color: var(--fg); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+/* Hysteresis chart */
+.chart-wrap { position: relative; background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 12px; min-height: 400px; }
+.chart-wrap h2 { font-size: 14px; font-weight: 600; margin: 0 0 12px 0; color: var(--fg2); }
+#hysteresisCanvas { display: block; width: 100%; height: 360px; cursor: crosshair; }
+.chart-tooltip { position: absolute; background: rgba(0,0,0,0.85); color: #fff; font-size: 12px; padding: 6px 10px; border-radius: 6px; pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 10; white-space: nowrap; }
+
+/* Legend for chart */
+.chart-legend { display: flex; gap: 20px; margin-top: 8px; font-size: 12px; }
+.chart-legend .legend-item { display: flex; align-items: center; gap: 6px; }
+.chart-legend .dot { width: 10px; height: 10px; border-radius: 50%; }
+.chart-legend .dot.up { background: var(--accent); }
+.chart-legend .dot.down { background: var(--accent-down); }
+
+/* Visualizer section */
+.viz-section { display: none; }
+.viz-section.active { display: block; }
+.viz-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: #fff; border: 1px solid var(--border); border-radius: 10px 10px 0 0; border-bottom: none; }
+.viz-header h2 { font-size: 14px; font-weight: 600; margin: 0; }
+.viz-header .filename { color: var(--fg3); font-size: 12px; }
+.viz-header .close-btn { background: none; border: none; font-size: 18px; cursor: pointer; color: var(--fg3); padding: 0 4px; }
+.viz-header .close-btn:hover { color: var(--fg); }
+.viz-body { display: flex; gap: 12px; padding: 14px; background: #fff; border: 1px solid var(--border); border-radius: 0 0 10px 10px; }
+.viz-left { flex: 1; min-width: 0; }
+.viz-right { width: 280px; flex-shrink: 0; }
+
+/* Canvas */
+.canvas-wrap { position: relative; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; display: flex; justify-content: center; align-items: center; min-height: 320px; background: repeating-conic-gradient(#f7f7f7 0% 25%, #fff 0% 50%) 50% / 20px 20px; }
+#vizCanvas { display: block; max-width: 100%; image-rendering: pixelated; }
+
+/* Controls */
+.controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.controls label { font-size: 13px; color: var(--fg2); display: flex; align-items: center; gap: 6px; }
+.controls input[type="range"] { width: 140px; }
+.controls .z-val { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--fg); min-width: 28px; text-align: center; }
+.mode-btns { display: flex; gap: 4px; }
+.mode-btns button { padding: 5px 12px; font-size: 13px; border: 1px solid var(--border); background: #fff; border-radius: 6px; cursor: pointer; color: var(--fg2); transition: all 0.15s; }
+.mode-btns button.active { border-color: var(--fg); color: var(--fg); background: #f5f5f5; }
+
+/* Legend */
+.legend-bar { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg3); margin-top: 8px; }
+.legend-gradient { width: 160px; height: 10px; border-radius: 5px; border: 1px solid var(--border); }
+
+/* Data table */
+.data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.data-table th, .data-table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); }
+.data-table th { font-weight: 600; color: var(--fg2); background: #fafafa; }
+.data-table tr:hover { background: var(--hover); cursor: pointer; }
+.data-table tr.selected { background: var(--accent-light); }
+.data-table tr.selected-down { background: var(--accent-down-light); }
+.data-table td { font-variant-numeric: tabular-nums; }
+
+/* Status */
+.status { text-align: center; font-size: 14px; color: var(--fg3); padding: 40px 20px; }
+.status.error { color: var(--danger); }
+.status.success { color: var(--success); }
+
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>OVF 磁滞回线分析器</h1>
+
+  <div class="toolbar">
+    <input type="file" id="ovfFolder" webkitdirectory directory multiple accept=".ovf">
+    <button class="btn primary" id="analyzeBtn" disabled>分析选中文件</button>
+    <div class="progress-area hidden" id="progressArea">
+      <span id="progressText">0 / 0</span>
+      <div class="progress-bar"><div class="fill" id="progressFill"></div></div>
+    </div>
+  </div>
+
+  <div class="info-panel hidden" id="infoPanel">
+    <div class="info-item"><span class="label">文件总数:</span><span class="value" id="infoTotal">-</span></div>
+    <div class="info-item"><span class="label">成功解析:</span><span class="value" id="infoSuccess">-</span></div>
+    <div class="info-item"><span class="label">失败:</span><span class="value" id="infoFail">-</span></div>
+    <div class="info-item"><span class="label">网格:</span><span class="value" id="infoGrid">-</span></div>
+    <div class="info-item"><span class="label">Mz 范围:</span><span class="value" id="infoMzRange">-</span></div>
+    <div class="info-item"><span class="label">H 范围:</span><span class="value" id="infoHRange">-</span></div>
+    <div class="info-item"><span class="label">Up点数:</span><span class="value" id="infoUp">-</span></div>
+    <div class="info-item"><span class="label">Down点数:</span><span class="value" id="infoDown">-</span></div>
+  </div>
+
+  <div class="chart-wrap hidden" id="chartWrap">
+    <h2>磁滞回线 (点击数据点查看磁矩分布)</h2>
+    <canvas id="hysteresisCanvas"></canvas>
+    <div class="chart-legend">
+      <div class="legend-item"><div class="dot down"></div><span>Down (正向: +B_max → -B_max)</span></div>
+      <div class="legend-item"><div class="dot up"></div><span>Up (反向: -B_max → +B_max)</span></div>
+    </div>
+    <div class="chart-tooltip" id="chartTooltip"></div>
+  </div>
+
+  <div class="viz-section" id="vizSection">
+    <div class="viz-header">
+      <div>
+        <h2>磁矩分布可视化</h2>
+        <span class="filename" id="vizFilename">-</span>
+      </div>
+      <button class="close-btn" id="closeViz">&times;</button>
+    </div>
+    <div class="viz-body">
+      <div class="viz-left">
+        <div class="controls">
+          <label>Z 切片 <input type="range" id="zSlider" min="0" max="0" value="0"><span class="z-val" id="zVal">0</span></label>
+          <div class="mode-btns">
+            <button id="btnMz" class="active">Mz 切片</button>
+            <button id="btnM">M 角度</button>
+          </div>
+        </div>
+        <div class="canvas-wrap" id="canvasWrap">
+          <canvas id="vizCanvas"></canvas>
+        </div>
+        <div id="legendArea">
+          <div class="legend-bar" id="legendMz">
+            <span>-1</span>
+            <div class="legend-gradient" style="background: linear-gradient(to right, #313695, #74add1, #ffffbf, #f46d43, #a50026)"></div>
+            <span>+1</span>
+            <span style="margin-left:8px">Mz</span>
+          </div>
+          <div class="legend-bar hidden" id="legendM">
+            <span>色相 = 面内方向</span>
+            <span style="margin-left:12px">亮度 Mz</span>
+            <span style="margin-left:12px">饱和度 面内大小</span>
+          </div>
+        </div>
+      </div>
+      <div class="viz-right">
+        <table class="data-table">
+          <thead><tr><th>参数</th><th>数值</th></tr></thead>
+          <tbody id="dataTableBody">
+            <tr><td>外磁场 Hx</td><td id="tbHx">-</td></tr>
+            <tr><td>外磁场 Hy</td><td id="tbHy">-</td></tr>
+            <tr><td>外磁场 Hz</td><td id="tbHz">-</td></tr>
+            <tr><td>平均 Mx</td><td id="tbMx">-</td></tr>
+            <tr><td>平均 My</td><td id="tbMy">-</td></tr>
+            <tr><td>平均 Mz</td><td id="tbMz">-</td></tr>
+            <tr><td>网格 nx</td><td id="tbNx">-</td></tr>
+            <tr><td>网格 ny</td><td id="tbNy">-</td></tr>
+            <tr><td>网格 nz</td><td id="tbNz">-</td></tr>
+            <tr><td>扫描方向</td><td id="tbDir">-</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  "use strict";
+
+  // DOM elements
+  var el = {
+    folderInput: document.getElementById("ovfFolder"),
+    analyzeBtn: document.getElementById("analyzeBtn"),
+    progressArea: document.getElementById("progressArea"),
+    progressText: document.getElementById("progressText"),
+    progressFill: document.getElementById("progressFill"),
+    infoPanel: document.getElementById("infoPanel"),
+    infoTotal: document.getElementById("infoTotal"),
+    infoSuccess: document.getElementById("infoSuccess"),
+    infoFail: document.getElementById("infoFail"),
+    infoGrid: document.getElementById("infoGrid"),
+    infoMzRange: document.getElementById("infoMzRange"),
+    infoHRange: document.getElementById("infoHRange"),
+    infoUp: document.getElementById("infoUp"),
+    infoDown: document.getElementById("infoDown"),
+    chartWrap: document.getElementById("chartWrap"),
+    hCanvas: document.getElementById("hysteresisCanvas"),
+    hCtx: document.getElementById("hysteresisCanvas").getContext("2d"),
+    tooltip: document.getElementById("chartTooltip"),
+    vizSection: document.getElementById("vizSection"),
+    vizFilename: document.getElementById("vizFilename"),
+    closeViz: document.getElementById("closeViz"),
+    zSlider: document.getElementById("zSlider"),
+    zVal: document.getElementById("zVal"),
+    btnMz: document.getElementById("btnMz"),
+    btnM: document.getElementById("btnM"),
+    vizCanvas: document.getElementById("vizCanvas"),
+    vizCtx: document.getElementById("vizCanvas").getContext("2d"),
+    legendMz: document.getElementById("legendMz"),
+    legendM: document.getElementById("legendM"),
+    canvasWrap: document.getElementById("canvasWrap"),
+  };
+
+  // State
+  var allFiles = [];
+  var parsedResults = [];  // all parsed results
+  var upResults = [];      // sweep: -B_max -> +B_max
+  var downResults = [];    // sweep: +B_max -> -B_max
+  var currentData = null;
+  var currentHeader = null;
+  var currentFile = null;
+  var drawMode = "mz";
+  var selectedIndex = -1;
+  var selectedBranch = null; // "up" or "down"
+  var chartPoints = [];
+
+  // Color helpers
+  function hsl(h, s, l) {
+    var r, g, b;
+    if (s === 0) { r = g = b = l; }
+    else {
+      var q = l < 0.5 ? l*(1+s) : l+s-l*s;
+      var p = 2*l - q;
+      r = hue2rgb(p, q, h+1/3);
+      g = hue2rgb(p, q, h);
+      b = hue2rgb(p, q, h-1/3);
+    }
+    return [Math.round(r*255), Math.round(g*255), Math.round(b*255)];
+  }
+  function hue2rgb(p, q, t) {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1/6) return p + (q-p)*6*t;
+    if (t < 1/2) return q;
+    if (t < 2/3) return p + (q-p)*(2/3-t)*6;
+    return p;
+  }
+
+  function diverging(t) {
+    t = Math.max(-1, Math.min(1, t));
+    var stops = [[-1,49,54,149],[-0.5,117,170,209],[0,255,255,191],[0.5,244,109,67],[1,165,0,38]];
+    var lo = stops[0], hi = stops[stops.length-1];
+    for (var i = 0; i < stops.length-1; i++) {
+      if (t >= stops[i][0] && t <= stops[i+1][0]) { lo = stops[i]; hi = stops[i+1]; break; }
+    }
+    var span = hi[0] - lo[0];
+    var f = span === 0 ? 0 : (t - lo[0]) / span;
+    return [Math.round(lo[1]+(hi[1]-lo[1])*f), Math.round(lo[2]+(hi[2]-lo[2])*f), Math.round(lo[3]+(hi[3]-lo[3])*f)];
+  }
+
+  // Extract external field from filename
+  // Supports formats like: m_hyst_down_B+1250.00Oe.ovf, m_hyst_up_B-1250.00Oe.ovf
+  function extractHFromFilename(filename) {
+    // Try patterns like B+1234.56Oe, B-1234.56Oe, H+1234.56, etc.
+    var patterns = [
+      /[Bb][ _]?([+-]?\d+\.?\d*)/,           // B+1250.00Oe
+      /[Hh][ _]?([+-]?\d+\.?\d*)/,           // H+1250
+      /[Hh]([+-]?\d+\.?\d*)/,                  // H1250, H+1250
+      /([+-]?\d+\.?\d*)(?=[^\d]*\.ovf)/i,    // any number before .ovf
+      /_(\d+\.?\d*)/,                          // _1250.00
+    ];
+    for (var i = 0; i < patterns.length; i++) {
+      var m = filename.match(patterns[i]);
+      if (m) {
+        var val = parseFloat(m[1]);
+        if (!isNaN(val)) {
+          return val; // value in Oe
+        }
+      }
+    }
+    return null;
+  }
+
+  // Detect sweep direction from filename
+  // "up" = -B_max -> +B_max (reverse sweep)
+  // "down" = +B_max -> -B_max (forward sweep)
+  function detectDirection(filename) {
+    var lower = filename.toLowerCase();
+    if (lower.indexOf("down") >= 0 || lower.indexOf("fwd") >= 0 || lower.indexOf("forward") >= 0) {
+      return "down";
+    }
+    if (lower.indexOf("up") >= 0 || lower.indexOf("rev") >= 0 || lower.indexOf("reverse") >= 0) {
+      return "up";
+    }
+    // Fallback: try to infer from field ordering after parsing
+    return null;
+  }
+
+  // Parse OVF file
+  function parseOVF(file) {
+    return new Promise(function(resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          var buf = e.target.result;
+          var totalLen = buf.byteLength;
+          var u8 = new Uint8Array(buf);
+
+          // Find "# End: Header" marker
+          var marker = new TextEncoder().encode("# End: Header");
+          var hdrEnd = -1;
+          for (var i = 0; i < Math.min(totalLen, 8192) - marker.length; i++) {
+            var ok = true;
+            for (var j = 0; j < marker.length; j++) { if (u8[i+j] !== marker[j]) { ok = false; break; } }
+            if (ok) { hdrEnd = i; break; }
+          }
+          if (hdrEnd === -1) { reject(new Error("未找到 # End: Header")); return; }
+
+          // Extend read to include "# Begin: Data ...\n" line after "# End: Header\n"
+          var dataDeclEnd = hdrEnd + marker.length;
+          while (dataDeclEnd < totalLen && u8[dataDeclEnd] !== 10) dataDeclEnd++;
+          if (dataDeclEnd < totalLen) dataDeclEnd++;
+          var nextLineEnd = dataDeclEnd;
+          while (nextLineEnd < totalLen && u8[nextLineEnd] !== 10) nextLineEnd++;
+          if (nextLineEnd < totalLen) nextLineEnd++;
+
+          var hdrStr = new TextDecoder("ascii").decode(new Uint8Array(buf, 0, nextLineEnd));
+
+          // Parse header fields
+          var h = {};
+          hdrStr.split(/\r?\n/).forEach(function(line) {
+            var m;
+            m = line.match(/^#\s*xnodes:\s*(\d+)/i);       if (m) h.nx = parseInt(m[1]);
+            m = line.match(/^#\s*ynodes:\s*(\d+)/i);       if (m) h.ny = parseInt(m[1]);
+            m = line.match(/^#\s*znodes:\s*(\d+)/i);       if (m) h.nz = parseInt(m[1]);
+            m = line.match(/^#\s*xstepsize:\s*([\d.+-]+)/i); if (m) h.dx = parseFloat(m[1]);
+            m = line.match(/^#\s*ystepsize:\s*([\d.+-]+)/i); if (m) h.dy = parseFloat(m[1]);
+            m = line.match(/^#\s*zstepsize:\s*([\d.+-]+)/i); if (m) h.dz = parseFloat(m[1]);
+            m = line.match(/^#\s*valuemultiplier:\s*([\d.+-]+)/i); if (m) h.vmul = parseFloat(m[1]);
+            m = line.match(/^#\s*valuedim:\s*(\d+)/i);     if (m) h.vd = parseInt(m[1]);
+            m = line.match(/^#\s*byte\s+order:\s*(\d+)/i); if (m) h.order = m[1];
+          });
+          h.vmul = h.vmul || 1.0;
+          h.vd = h.vd || 3;
+
+          // Extract H from filename (primary method for mumax3)
+          var hOe = extractHFromFilename(file.name);
+          if (hOe !== null) {
+            h.hOe = hOe;
+            // Convert Oe to A/m: 1 Oe = 1000/(4*pi) A/m ≈ 79.577 A/m
+            h.hz = hOe * 79.57747154594767;
+            h.hx = 0;
+            h.hy = 0;
+          } else {
+            // Fallback: try to parse from header comments
+            hdrStr.split(/\r?\n/).forEach(function(line) {
+              var m;
+              m = line.match(/^#\s*[^:]*[Hh][Xx]?\s*[:=]?\s*([\d.eE+-]+)/i); if (m && !h.hx) h.hx = parseFloat(m[1]);
+              m = line.match(/^#\s*[^:]*[Hh][Yy]?\s*[:=]?\s*([\d.eE+-]+)/i); if (m && !h.hy) h.hy = parseFloat(m[1]);
+              m = line.match(/^#\s*[^:]*[Hh][Zz]?\s*[:=]?\s*([\d.eE+-]+)/i); if (m && !h.hz) h.hz = parseFloat(m[1]);
+            });
+            h.hx = h.hx || 0;
+            h.hy = h.hy || 0;
+            h.hz = h.hz || 0;
+            h.hOe = h.hz / 79.57747154594767;
+          }
+
+          // Detect sweep direction
+          h.direction = detectDirection(file.name);
+
+          // Detect data type
+          var dtype;
+          if (/Data\s+Binary\s*4/i.test(hdrStr)) dtype = 4;
+          else if (/Data\s+Binary\s*8/i.test(hdrStr)) dtype = 8;
+          else if (/Data\s+Text/i.test(hdrStr)) dtype = 0;
+          else { reject(new Error("无法识别数据格式")); return; }
+
+          // Locate binary data start
+          var ds = hdrEnd + marker.length;
+          while (ds < totalLen && u8[ds] !== 10) ds++;
+          if (ds < totalLen) ds++;
+          while (ds < totalLen && u8[ds] !== 10) ds++;
+          if (ds < totalLen) ds++;
+          while (ds < totalLen && (u8[ds] === 10 || u8[ds] === 13)) ds++;
+
+          var expected = h.nx * h.ny * h.nz * h.vd;
+
+          // Read raw data
+          var raw;
+          if (dtype === 0) {
+            var txt = new TextDecoder("ascii").decode(new Uint8Array(buf, ds));
+            var nums = txt.trim().split(/\s+/).map(Number).filter(function(n) { return !isNaN(n); });
+            raw = new Float32Array(nums);
+          } else {
+            var bpe = dtype === 4 ? 4 : 8;
+            var src = new Uint8Array(buf, ds);
+            var cpy = new Uint8Array(src.length);
+            for (var ci = 0; ci < src.length; ci++) cpy[ci] = src[ci];
+            raw = dtype === 4 ? new Float32Array(cpy.buffer) : new Float64Array(cpy.buffer);
+            if (h.order === "4321") {
+              var dv = new DataView(cpy.buffer);
+              for (var si = 0; si < raw.length; si++) {
+                raw[si] = dtype === 4 ? dv.getFloat32(si*4, true) : dv.getFloat64(si*8, true);
+              }
+            }
+            if (dtype === 4 && expected >= 3 && Math.abs(raw[0]) > 10) {
+              var mag = Math.sqrt(raw[1]*raw[1] + raw[2]*raw[2] + raw[3]*raw[3]);
+              if (mag > 0.3 && mag < 1.7) {
+                var tmp = new Float32Array(raw.length - 1);
+                for (var ti = 0; ti < tmp.length; ti++) tmp[ti] = raw[ti+1];
+                raw = tmp;
+              }
+            }
+          }
+
+          if (raw.length < expected) { reject(new Error("数据不足: " + raw.length + " < " + expected)); return; }
+          if (raw.length > expected) {
+            var tmp2 = new Float32Array(expected);
+            for (var ti2 = 0; ti2 < expected; ti2++) tmp2[ti2] = raw[ti2];
+            raw = tmp2;
+          }
+          if (h.vmul !== 1.0) { for (var mi = 0; mi < raw.length; mi++) raw[mi] *= h.vmul; }
+
+          // Transpose: x-fastest -> z-fastest
+          var out = new Float32Array(expected);
+          for (var iz = 0; iz < h.nz; iz++) {
+            for (var iy = 0; iy < h.ny; iy++) {
+              for (var ix = 0; ix < h.nx; ix++) {
+                var srcIdx = ((iz * h.ny + iy) * h.nx + ix) * h.vd;
+                var dstIdx = ((ix * h.ny + iy) * h.nz + iz) * h.vd;
+                for (var c = 0; c < h.vd; c++) out[dstIdx + c] = raw[srcIdx + c];
+              }
+            }
+          }
+
+          // Calculate average magnetization
+          var sumMx = 0, sumMy = 0, sumMz = 0;
+          for (var pi = 0; pi < expected; pi += 3) {
+            sumMx += out[pi];
+            sumMy += out[pi+1];
+            sumMz += out[pi+2];
+          }
+          var nCells = h.nx * h.ny * h.nz;
+          h.avgMx = sumMx / nCells;
+          h.avgMy = sumMy / nCells;
+          h.avgMz = sumMz / nCells;
+
+          resolve({ data: out, header: h });
+        } catch (ex) { reject(ex); }
+      };
+      reader.onerror = function() { reject(new Error("读取文件失败")); };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  // File input handler
+  el.folderInput.addEventListener("change", function(e) {
+    allFiles = Array.from(e.target.files).filter(function(f) {
+      return f.name.toLowerCase().endsWith(".ovf");
+    });
+    if (allFiles.length > 0) {
+      el.analyzeBtn.disabled = false;
+      el.analyzeBtn.textContent = "分析 " + allFiles.length + " 个 OVF 文件";
+    } else {
+      el.analyzeBtn.disabled = true;
+      el.analyzeBtn.textContent = "分析选中文件";
+    }
+  });
+
+  // Analyze button
+  el.analyzeBtn.addEventListener("click", async function() {
+    if (allFiles.length === 0) return;
+
+    el.analyzeBtn.disabled = true;
+    el.progressArea.classList.remove("hidden");
+    parsedResults = [];
+    var success = 0, fail = 0;
+
+    for (var i = 0; i < allFiles.length; i++) {
+      var file = allFiles[i];
+      el.progressText.textContent = (i+1) + " / " + allFiles.length + " - " + file.name;
+      el.progressFill.style.width = ((i+1) / allFiles.length * 100) + "%";
+
+      try {
+        var result = await parseOVF(file);
+        result.filename = file.name;
+        parsedResults.push(result);
+        success++;
+      } catch (err) {
+        console.error("Failed to parse " + file.name + ":", err);
+        fail++;
+      }
+    }
+
+    // === Separate into up and down branches ===
+    upResults = [];
+    downResults = [];
+    var unknownDir = [];
+
+    parsedResults.forEach(function(r) {
+      if (r.header.direction === "up") {
+        upResults.push(r);
+      } else if (r.header.direction === "down") {
+        downResults.push(r);
+      } else {
+        unknownDir.push(r);
+      }
+    });
+
+    // For unknown direction, try to infer from sweep ordering
+    // If we have both up and down detected, use them as reference
+    // Otherwise, split by field ordering: sort all by hOe, then
+    // if a point at same H has different Mz, assign based on typical hysteresis shape
+    if (unknownDir.length > 0) {
+      // Group by H field (rounded to avoid float issues)
+      var hGroups = {};
+      unknownDir.forEach(function(r) {
+        var key = Math.round(r.header.hOe * 100) / 100;
+        if (!hGroups[key]) hGroups[key] = [];
+        hGroups[key].push(r);
+      });
+
+      // For each H with multiple points, the one with higher Mz is typically the "up" branch
+      // (coming from negative saturation)
+      Object.keys(hGroups).forEach(function(key) {
+        var group = hGroups[key];
+        if (group.length >= 2) {
+          group.sort(function(a, b) { return b.header.avgMz - a.header.avgMz; });
+          // Higher Mz -> up branch (was at negative H, now increasing)
+          upResults.push(group[0]);
+          downResults.push(group[1]);
+          for (var gi = 2; gi < group.length; gi++) {
+            // Extra points: assign to whichever has fewer
+            if (upResults.length <= downResults.length) {
+              upResults.push(group[gi]);
+            } else {
+              downResults.push(group[gi]);
+            }
+          }
+        } else {
+          // Single point: assign based on neighbor analysis or just split evenly
+          if (upResults.length <= downResults.length) {
+            upResults.push(group[0]);
+          } else {
+            downResults.push(group[0]);
+          }
+        }
+      });
+    }
+
+    // Sort each branch by external field
+    upResults.sort(function(a, b) { return a.header.hOe - b.header.hOe; });
+    downResults.sort(function(a, b) { return a.header.hOe - b.header.hOe; });
+
+    // Update info
+    el.infoTotal.textContent = allFiles.length;
+    el.infoSuccess.textContent = success;
+    el.infoFail.textContent = fail;
+    el.infoUp.textContent = upResults.length;
+    el.infoDown.textContent = downResults.length;
+
+    if (parsedResults.length > 0) {
+      var h0 = parsedResults[0].header;
+      el.infoGrid.textContent = h0.nx + " x " + h0.ny + " x " + h0.nz;
+      var minMz = Math.min.apply(null, parsedResults.map(function(r) { return r.header.avgMz; }));
+      var maxMz = Math.max.apply(null, parsedResults.map(function(r) { return r.header.avgMz; }));
+      el.infoMzRange.textContent = minMz.toFixed(4) + " ~ " + maxMz.toFixed(4);
+      var minH = Math.min.apply(null, parsedResults.map(function(r) { return r.header.hOe; }));
+      var maxH = Math.max.apply(null, parsedResults.map(function(r) { return r.header.hOe; }));
+      el.infoHRange.textContent = minH.toFixed(1) + " ~ " + maxH.toFixed(1) + " Oe";
+    }
+    el.infoPanel.classList.remove("hidden");
+    el.progressArea.classList.add("hidden");
+    el.analyzeBtn.disabled = false;
+    el.analyzeBtn.textContent = "重新分析";
+
+    if (parsedResults.length > 0) {
+      // 必须先显示容器，canvas 才能获取正确的尺寸
+      el.chartWrap.classList.remove("hidden");
+      // 强制浏览器重排，确保 getBoundingClientRect() 返回正确值
+      void el.hCanvas.offsetWidth;
+      drawHysteresis();
+    }
+  });
+
+  // Draw hysteresis curve with two branches
+  function drawHysteresis() {
+    var canvas = el.hCanvas;
+    var ctx = el.hCtx;
+    var rect = canvas.getBoundingClientRect();
+    // 防止隐藏状态下尺寸为0
+    var cw = rect.width || canvas.clientWidth || 800;
+    var ch = rect.height || canvas.clientHeight || 360;
+    canvas.width = cw * window.devicePixelRatio;
+    canvas.height = ch * window.devicePixelRatio;
+    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    var w = rect.width, h = rect.height;
+
+    // Calculate data ranges from ALL results
+    var minH = Infinity, maxH = -Infinity, minMz = Infinity, maxMz = -Infinity;
+    parsedResults.forEach(function(r) {
+      var H = r.header.hOe;
+      if (H < minH) minH = H;
+      if (H > maxH) maxH = H;
+      if (r.header.avgMz < minMz) minMz = r.header.avgMz;
+      if (r.header.avgMz > maxMz) maxMz = r.header.avgMz;
+    });
+
+    // Add padding
+    var hPad = (maxH - minH) * 0.1 || Math.abs(maxH) * 0.1 || 100;
+    var mzPad = (maxMz - minMz) * 0.1 || 0.1;
+    minH -= hPad; maxH += hPad;
+    minMz -= mzPad; maxMz += mzPad;
+    if (minH === maxH) { minH -= 100; maxH += 100; }
+    if (minMz === maxMz) { minMz -= 0.1; maxMz += 0.1; }
+
+    var margin = { top: 20, right: 30, bottom: 50, left: 70 };
+    var plotW = w - margin.left - margin.right;
+    var plotH = h - margin.top - margin.bottom;
+
+    function xScale(H) { return margin.left + (H - minH) / (maxH - minH) * plotW; }
+    function yScale(Mz) { return margin.top + plotH - (Mz - minMz) / (maxMz - minMz) * plotH; }
+
+    // Clear
+    ctx.clearRect(0, 0, w, h);
+
+    // Grid lines
+    ctx.strokeStyle = "#e5e5e5";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 2]);
+    for (var i = 0; i <= 5; i++) {
+      var y = margin.top + plotH * i / 5;
+      ctx.beginPath(); ctx.moveTo(margin.left, y); ctx.lineTo(margin.left + plotW, y); ctx.stroke();
+    }
+    for (var i = 0; i <= 5; i++) {
+      var x = margin.left + plotW * i / 5;
+      ctx.beginPath(); ctx.moveTo(x, margin.top); ctx.lineTo(x, margin.top + plotH); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // Axes
+    ctx.strokeStyle = "#333";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(margin.left, margin.top); ctx.lineTo(margin.left, margin.top + plotH);
+    ctx.lineTo(margin.left + plotW, margin.top + plotH); ctx.stroke();
+
+    // Zero lines
+    if (minMz <= 0 && maxMz >= 0) {
+      ctx.strokeStyle = "#999";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      var y0 = yScale(0);
+      ctx.beginPath(); ctx.moveTo(margin.left, y0); ctx.lineTo(margin.left + plotW, y0); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    if (minH <= 0 && maxH >= 0) {
+      ctx.strokeStyle = "#999";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      var x0 = xScale(0);
+      ctx.beginPath(); ctx.moveTo(x0, margin.top); ctx.lineTo(x0, margin.top + plotH); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Labels
+    ctx.fillStyle = "#555";
+    ctx.font = "12px sans-serif";
+    ctx.textAlign = "center";
+    for (var i = 0; i <= 5; i++) {
+      var Hval = minH + (maxH - minH) * i / 5;
+      ctx.fillText(Math.round(Hval).toString(), margin.left + plotW * i / 5, margin.top + plotH + 20);
+    }
+    ctx.textAlign = "right";
+    for (var i = 0; i <= 5; i++) {
+      var Mval = minMz + (maxMz - minMz) * (1 - i / 5);
+      ctx.fillText(Mval.toFixed(3), margin.left - 10, margin.top + plotH * i / 5 + 4);
+    }
+
+    // Axis titles
+    ctx.save();
+    ctx.fillStyle = "#333";
+    ctx.font = "bold 13px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("外磁场 H (Oe)", margin.left + plotW / 2, h - 8);
+    ctx.translate(18, margin.top + plotH / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText("平均 Mz", 0, 0);
+    ctx.restore();
+
+    chartPoints = [];
+
+    // === Draw Down branch points (red) ===
+    if (downResults.length > 0) {
+      downResults.forEach(function(r, idx) {
+        var H = r.header.hOe;
+        var x = xScale(H);
+        var y = yScale(r.header.avgMz);
+        chartPoints.push({ x: x, y: y, r: r, idx: idx, branch: "down" });
+      });
+    }
+
+    // === Draw Up branch points (blue) ===
+    if (upResults.length > 0) {
+      upResults.forEach(function(r, idx) {
+        var H = r.header.hOe;
+        var x = xScale(H);
+        var y = yScale(r.header.avgMz);
+        chartPoints.push({ x: x, y: y, r: r, idx: idx, branch: "up" });
+      });
+    }
+
+    // Draw points
+    chartPoints.forEach(function(pt) {
+      var isSelected = (pt.idx === selectedIndex && pt.branch === selectedBranch);
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, isSelected ? 8 : 5, 0, Math.PI * 2);
+      ctx.fillStyle = isSelected ? "#f59e0b" : (pt.branch === "down" ? "#dc2626" : "#2563eb");
+      ctx.fill();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    });
+  }
+
+  // Canvas click handler for hysteresis chart
+  el.hCanvas.addEventListener("click", function(e) {
+    if (chartPoints.length === 0) return;
+    var rect = el.hCanvas.getBoundingClientRect();
+    var clickX = (e.clientX - rect.left) * window.devicePixelRatio;
+    var clickY = (e.clientY - rect.top) * window.devicePixelRatio;
+
+    var bestIdx = -1, bestDist = Infinity, bestBranch = null;
+    chartPoints.forEach(function(pt) {
+      var dx = clickX - pt.x * window.devicePixelRatio;
+      var dy = clickY - pt.y * window.devicePixelRatio;
+      var dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < bestDist && dist < 20 * window.devicePixelRatio) {
+        bestDist = dist;
+        bestIdx = pt.idx;
+        bestBranch = pt.branch;
+      }
+    });
+
+    if (bestIdx >= 0 && bestBranch) {
+      selectPoint(bestIdx, bestBranch);
+    }
+  });
+
+  // Canvas hover for tooltip
+  el.hCanvas.addEventListener("mousemove", function(e) {
+    if (chartPoints.length === 0) return;
+    var rect = el.hCanvas.getBoundingClientRect();
+    var clickX = (e.clientX - rect.left) * window.devicePixelRatio;
+    var clickY = (e.clientY - rect.top) * window.devicePixelRatio;
+
+    var bestIdx = -1, bestDist = Infinity, bestBranch = null;
+    chartPoints.forEach(function(pt) {
+      var dx = clickX - pt.x * window.devicePixelRatio;
+      var dy = clickY - pt.y * window.devicePixelRatio;
+      var dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < bestDist && dist < 20 * window.devicePixelRatio) {
+        bestDist = dist;
+        bestIdx = pt.idx;
+        bestBranch = pt.branch;
+      }
+    });
+
+    if (bestIdx >= 0 && bestBranch) {
+      var r = bestBranch === "up" ? upResults[bestIdx] : downResults[bestIdx];
+      var dirLabel = bestBranch === "up" ? "Up" : "Down";
+      el.tooltip.innerHTML = r.filename + "<br>[" + dirLabel + "] H=" + r.header.hOe.toFixed(1) + " Oe<br>Mz=" + r.header.avgMz.toFixed(4);
+      el.tooltip.style.left = (e.clientX - rect.left + 10) + "px";
+      el.tooltip.style.top = (e.clientY - rect.top - 40) + "px";
+      el.tooltip.style.opacity = "1";
+      el.hCanvas.style.cursor = "pointer";
+    } else {
+      el.tooltip.style.opacity = "0";
+      el.hCanvas.style.cursor = "crosshair";
+    }
+  });
+
+  el.hCanvas.addEventListener("mouseleave", function() {
+    el.tooltip.style.opacity = "0";
+  });
+
+  // Select a point and show visualizer
+  function selectPoint(idx, branch) {
+    selectedIndex = idx;
+    selectedBranch = branch;
+    var result = branch === "up" ? upResults[idx] : downResults[idx];
+    currentData = result.data;
+    currentHeader = result.header;
+    currentFile = result;
+
+    // Update visualizer
+    el.vizFilename.textContent = result.filename + "  |  H = " + result.header.hOe.toFixed(1) + " Oe  |  " + (branch === "up" ? "Up (反向)" : "Down (正向)");
+    el.vizSection.classList.add("active");
+
+    // Update slider
+    el.zSlider.max = currentHeader.nz - 1;
+    el.zSlider.value = Math.floor(currentHeader.nz / 2);
+    el.zVal.textContent = el.zSlider.value;
+
+    // Update data table
+    document.getElementById("tbHx").textContent = currentHeader.hx.toExponential(3) + " A/m";
+    document.getElementById("tbHy").textContent = currentHeader.hy.toExponential(3) + " A/m";
+    document.getElementById("tbHz").textContent = currentHeader.hz.toExponential(3) + " A/m";
+    document.getElementById("tbMx").textContent = currentHeader.avgMx.toFixed(6);
+    document.getElementById("tbMy").textContent = currentHeader.avgMy.toFixed(6);
+    document.getElementById("tbMz").textContent = currentHeader.avgMz.toFixed(6);
+    document.getElementById("tbNx").textContent = currentHeader.nx;
+    document.getElementById("tbNy").textContent = currentHeader.ny;
+    document.getElementById("tbNz").textContent = currentHeader.nz;
+    document.getElementById("tbDir").textContent = branch === "up" ? "Up (-B→+B)" : "Down (+B→-B)";
+
+    drawViz();
+    drawHysteresis(); // redraw to highlight selected point
+
+    // Scroll to visualizer
+    el.vizSection.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // Draw visualizer
+  function drawViz() {
+    if (!currentData) return;
+    var nx = currentHeader.nx, ny = currentHeader.ny, nz = currentHeader.nz;
+    var z = parseInt(el.zSlider.value, 10);
+    el.vizCanvas.width = nx;
+    el.vizCanvas.height = ny;
+    var img = el.vizCtx.createImageData(nx, ny);
+    var px = img.data;
+    for (var iy = 0; iy < ny; iy++) {
+      for (var ix = 0; ix < nx; ix++) {
+        var base = ((ix * ny + iy) * nz + z) * 3;
+        var mx = currentData[base], my = currentData[base+1], mz = currentData[base+2];
+        var pi = (iy * nx + ix) * 4;
+        if (drawMode === "mz") {
+          var c = diverging(mz);
+          px[pi] = c[0]; px[pi+1] = c[1]; px[pi+2] = c[2]; px[pi+3] = 255;
+        } else {
+          var angle = Math.atan2(my, mx);
+          var hue = (angle + Math.PI) / (2 * Math.PI);
+          var inplane = Math.min(1, Math.sqrt(mx*mx + my*my) * 1.3);
+          var light = 0.5 + 0.45 * Math.max(-1, Math.min(1, mz));
+          var c2 = hsl(hue, inplane, light);
+          px[pi] = c2[0]; px[pi+1] = c2[1]; px[pi+2] = c2[2]; px[pi+3] = 255;
+        }
+      }
+    }
+    el.vizCtx.putImageData(img, 0, 0);
+    fitVizCanvas();
+  }
+
+  function fitVizCanvas() {
+    if (!currentHeader) return;
+    var wrap = el.canvasWrap;
+    var ww = wrap.clientWidth - 24;
+    var wh = Math.min(500, window.innerHeight * 0.45);
+    var nx = currentHeader.nx, ny = currentHeader.ny;
+    if (nx && ny) {
+      var scale = Math.min(ww / nx, wh / ny, 4);
+      el.vizCanvas.style.width = Math.round(nx * scale) + "px";
+      el.vizCanvas.style.height = Math.round(ny * scale) + "px";
+    }
+  }
+
+  // Visualizer controls
+  el.zSlider.addEventListener("input", function() {
+    el.zVal.textContent = el.zSlider.value;
+    drawViz();
+  });
+
+  el.btnMz.addEventListener("click", function() {
+    drawMode = "mz";
+    el.btnMz.classList.add("active");
+    el.btnM.classList.remove("active");
+    el.legendMz.classList.remove("hidden");
+    el.legendM.classList.add("hidden");
+    drawViz();
+  });
+
+  el.btnM.addEventListener("click", function() {
+    drawMode = "m";
+    el.btnM.classList.add("active");
+    el.btnMz.classList.remove("active");
+    el.legendMz.classList.add("hidden");
+    el.legendM.classList.remove("hidden");
+    drawViz();
+  });
+
+  el.closeViz.addEventListener("click", function() {
+    el.vizSection.classList.remove("active");
+    selectedIndex = -1;
+    selectedBranch = null;
+    drawHysteresis();
+  });
+
+  window.addEventListener("resize", function() {
+    if (parsedResults.length > 0) {
+      // resize 时如果 chartWrap 被隐藏，先显示再绘制
+      if (el.chartWrap.classList.contains("hidden")) {
+        el.chartWrap.classList.remove("hidden");
+        void el.hCanvas.offsetWidth;
+      }
+      drawHysteresis();
+    }
+    fitVizCanvas();
+  });
+
+})();
+</script>
+</body>
+</html>
